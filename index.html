@@ -381,7 +381,7 @@ return fetch(SB+path,opt).then(function(r){return r.text().then(function(t){var 
 function pack(j,old){return{at:j.access_token,rt:j.refresh_token,exp:j.expires_at||Math.floor(Date.now()/1000)+(j.expires_in||3600),uid:(j.user&&j.user.id)||(old&&old.uid)}}
 function token(){var s=jget(sk(SES));if(!s)return Promise.reject();if(s.exp>Date.now()/1000+60)return Promise.resolve(s);
 return api("/auth/v1/token?grant_type=refresh_token",{method:"POST",body:JSON.stringify({refresh_token:s.rt})}).then(function(j){var n=pack(j,s);try{localStorage.setItem(sk(SES),JSON.stringify(n))}catch(e){}return n})}
-function push(){if(!navigator.onLine||!SES)return;token().then(function(s){return api("/rest/v1/shops?on_conflict=user_id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({user_id:s.uid,data:S,updated_at:new Date(S.ts||Date.now()).toISOString()})},s.at)}).then(function(){try{localStorage.setItem("te.ls",Date.now())}catch(e){}}).catch(function(){})}
+function push(){if(!navigator.onLine||!SES||window.noPush)return;token().then(function(s){return api("/rest/v1/shops?on_conflict=user_id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({user_id:s.uid,data:S,updated_at:new Date(S.ts||Date.now()).toISOString()})},s.at)}).then(function(){try{localStorage.setItem("te.ls",Date.now())}catch(e){}}).catch(function(){})}
 function pull(){if(!navigator.onLine||!SES)return;token().then(function(s){return api("/rest/v1/shops?select=data,updated_at&user_id=eq."+s.uid,{},s.at)}).then(function(r){try{localStorage.setItem("te.ls",Date.now())}catch(e){}var row=r[0],rts=row?new Date(row.updated_at).getTime():0;
 if(row&&rts>(S.ts||0)){S=row.data;S.ts=rts;P=S.p;cart=P.map(function(){return 0});last=snap();try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}refresh()}else if(!row||(S.ts||0)>rts)push()}).catch(function(){})}
 function fake(ph){return ph+"@users.tripleease.app"}
@@ -673,6 +673,33 @@ $("#eList").innerHTML=S.exp.map(function(e,i){return i}).slice(-15).reverse().ma
 var rev=sum(S.sales,function(s){return s.total}),cg=sum(S.sales,function(s){return sum(s.items,function(x){return x[2]*x[4]})}),ex=sum(S.exp,function(e){return e.a}),r=function(a,b){return '<div class="row"><div class="grow">'+a+'</div><b>'+money(b)+'</b></div>'};
 $("#plBox").innerHTML=r("Revenue (sales)",rev)+r("Cost of goods sold",cg)+r("Gross profit",rev-cg)+r("Expenses",ex)+r("<b>Net profit</b>",rev-cg-ex)}
 var oldE=extra;extra=function(){oldE();extra3()};
+
+/*V4*/
+function stripImg(){var c=JSON.parse(JSON.stringify(S));c.p.forEach(function(p){p[8]=""});return c}
+function snapshot(force){var key="te.snapAt."+SES;if(!navigator.onLine||!SES||window.noPush)return Promise.resolve();var lt=+localStorage.getItem(key)||0;if(!force&&Date.now()-lt<864e5)return Promise.resolve();if(!S.p.length&&!S.sales.length)return Promise.resolve();
+return token().then(function(s){return api("/rest/v1/shop_snapshots",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({user_id:s.uid,data:stripImg()})},s.at).then(function(){try{localStorage.setItem(key,Date.now())}catch(e){}return api("/rest/v1/shop_snapshots?select=id&user_id=eq."+s.uid+"&order=taken_at.desc&offset=14&limit=100",{},s.at)}).then(function(r){if(r.length)return api("/rest/v1/shop_snapshots?id=in.("+r.map(function(x){return x.id}).join(",")+")",{method:"DELETE"},s.at)})}).catch(function(){})}
+if(SES){setTimeout(function(){snapshot()},6000);addEventListener("online",function(){setTimeout(function(){snapshot()},3000)});document.addEventListener("visibilitychange",function(){if(!document.hidden)snapshot()})}
+function applyRestore(d,keepPhotos){try{localStorage.setItem("te.pre."+SES,JSON.stringify(S))}catch(e){}
+if(keepPhotos){var m={};P.forEach(function(p){if(p[8])m[p[0]]=p[8]});d.p.forEach(function(p){if(!p[8]&&m[p[0]])p[8]=m[p[0]]})}
+["sales","exp","debts"].forEach(function(k){d[k]=d[k]||[]});d.pp=d.pp||0;d.rcv=d.rcv||0;d.sup=d.sup||0;
+S=d;S.ts=Date.now();P=S.p;cart=P.map(function(){return 0});refresh();toast("Restored")}
+function askRestore(d,keepPhotos,when){if(!d||!Array.isArray(d.p)||!Array.isArray(d.sales)){toast("This is not a Triple Ease backup");return}
+sheet({t:"Restore this copy?",info:"It has <b>"+d.p.length+" products</b> and <b>"+d.sales.length+" sales</b>"+(when?", saved "+esc(when):"")+". It replaces the records on this phone and in your online copy. A safety copy of what you have now is kept on this phone, so you can undo.",sl:"Restore now",save:function(){applyRestore(d,keepPhotos)}})}
+$("#exB").insertAdjacentHTML("afterend",'<span class="btn ghost" style="position:relative;overflow:hidden;display:block;text-align:center;margin-top:8px">Restore from backup file<input id="rsF" type="file" accept=".json,application/json" style="'+OV+'"></span><button class="btn ghost" id="rsOn" style="margin-top:8px">Restore an earlier online copy</button><button class="btn ghost" id="rsUndo" style="margin-top:8px">Undo last restore</button>');
+$("#rsF").onchange=function(){var f=this.files[0];this.value="";if(!f)return;var r=new FileReader();r.onload=function(){try{askRestore(JSON.parse(r.result),false,new Date(f.lastModified).toLocaleDateString())}catch(e){toast("Could not read this file")}};r.readAsText(f)};
+$("#rsUndo").onclick=function(){var pre=null;try{pre=JSON.parse(localStorage.getItem("te.pre."+SES))}catch(e){}if(!pre)return toast("Nothing to undo");askRestore(pre,false,"before the last restore")};
+$("#rsOn").onclick=function(){if(!navigator.onLine)return toast("This needs internet");
+token().then(function(s){return api("/rest/v1/shop_snapshots?select=id,taken_at&user_id=eq."+s.uid+"&order=taken_at.desc&limit=14",{},s.at).then(function(r){
+if(!r.length)return toast("No online copies yet. The first one is made within a day.");var lab=r.map(function(x){return new Date(x.taken_at).toLocaleString()});
+sheet({t:"Restore an earlier copy",info:"Photos on this phone are kept.",fields:[{k:"w",l:"Choose a copy",opts:lab,v:lab[0]}],sl:"Next",save:function(v){var x=r[lab.indexOf(v.w)];
+api("/rest/v1/shop_snapshots?select=data&id=eq."+x.id,{},s.at).then(function(j){askRestore(j[0].data,true,lab[lab.indexOf(v.w)])}).catch(function(){toast("Could not load that copy")})}})})}).catch(function(){toast("Could not reach your online copies")})};
+var w0=$("#wipe"),w2=w0.cloneNode(true);w0.parentNode.replaceChild(w2,w0);w2.id="wipe2";w2.textContent="Clear data on this phone";
+w2.onclick=function(){var u=jget("te.users")||{},biz=(u[SES]||{}).biz||"",ls=+localStorage.getItem("te.ls")||0;
+sheet({t:"Clear data on this phone",info:"This removes the records saved on <b>this phone only</b> and logs you out. Your online copy is not touched, and logging in again brings it back. Type the business name <b>"+esc(biz)+"</b> to confirm.",fields:[{k:"n",l:"Business name",v:""}],sl:"Clear this phone",save:function(v){
+if((S.ts||0)>ls&&(S.p.length||S.sales.length)){toast("Some records have not synced yet. Connect to the internet and tap Sync now first.");return false}
+if(v.n.trim().toLowerCase()!=biz.toLowerCase()){toast("The name does not match");return false}
+window.noPush=true;clearTimeout(pt);try{localStorage.removeItem(K);localStorage.removeItem("te.session");localStorage.removeItem(sk(SES))}catch(e){}location.reload()}})};
+var oldE4=extra;extra=function(){oldE4();var t=+localStorage.getItem("te.snapAt."+SES)||0;$("#lsync").textContent+=" Last online copy: "+(t?new Date(t).toLocaleString():"not yet")+"."};
 
 refresh()})();
 (function(){
